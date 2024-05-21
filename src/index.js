@@ -21,6 +21,8 @@ export function converter(result, options = {
 }, globalVariableList = [], globalMixinList = []) {
   if (options.isSignComment) result = result.replace(/\/\/\s(.*)/g, '/* !#sign#! $1 */')
 
+  console.log(`constants: ${JSON.stringify(options.constants, null, 2)}`)
+
   // Add semicolons to properties with inline comments to ensure that they are parsed correctly
   result = result.replace(/^( *)(\S(.+?))( *)(\/\*.*\*\/)$/gm, '$1$2;$4$5');
 

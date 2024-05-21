@@ -20,6 +20,9 @@ let PROPERTY_LIST = []
 let VARIABLE_NAME_LIST = []
 let GLOBAL_MIXIN_NAME_LIST = []
 let GLOBAL_VARIABLE_NAME_LIST = []
+let CONSTANTS = {}
+let usePaths = {}
+
 let lastPropertyLineno = 0
 let lastPropertyLength = 0
 
@@ -163,6 +166,7 @@ function visitNode(node) {
   }
   const json = node.__type ? node : node.toJSON && node.toJSON()
   const handler = TYPE_VISITOR_MAP[json.__type]
+  debugger
   return handler ? handler(node) : ''
 }
 
@@ -275,9 +279,10 @@ function visitLiteral(node) {
   return node.val || ''
 }
 
-function visitProperty({ expr, lineno, segments }) {
+function visitProperty(node) {
+  const { expr, lineno, segments } = node;
   const suffix = ';'
-  const before = handleLinenoAndIndentation({ lineno })
+  let before = handleLinenoAndIndentation({ lineno })
   oldLineno = lineno
   isProperty = true
   const segmentsText = visitNodes(segments)
@@ -302,12 +307,48 @@ function visitProperty({ expr, lineno, segments }) {
   const expText = visitExpression(expr)
   PROPERTY_LIST.unshift({ prop: segmentsText, value: expText })
   isProperty = false
+
+  // This is the "absolute" mixin from nib; replace with appropriate position attributes.
+  if (segmentsText === 'absolute') {
+    let transformed = before + 'position: absolute;';
+    let lastProperty = undefined;
+    const handleProperty = (val) => {
+      if (lastProperty) {
+        before = handleLinenoAndIndentation(node)
+        oldLineno = node.lineno
+        transformed += `\n${before}${lastProperty}: ${val};`;
+        lastProperty = undefined;
+      }
+    }
+
+    const KNOWN_PROPERTIES = ['top', 'right', 'bottom', 'left'];
+
+    const nodes = nodesToJSON(expr.nodes)
+    nodes.forEach((node) => {
+      const nodeText = visitNode(node);
+      if (KNOWN_PROPERTIES.includes(nodeText)) {
+        handleProperty(0); // Set previous value to 0, if one has been found already
+        lastProperty = nodeText;
+      } else {
+        handleProperty(nodeText);
+      }
+    });
+
+    handleProperty(0);
+
+    return transformed;
+  }
+
   return /\/\//.test(expText)
     ? `${before + segmentsText.replace(/^$/, '')}: ${expText}`
     : trimSemicolon(`${before + segmentsText.replace(/^$/, '')}: ${expText + suffix}`, ';')
 }
 
 function visitIdent({ val, name, rest, mixin, property }) {
+  if (CONSTANTS[name]) {
+    usePaths[CONSTANTS[name]] = true;
+  }
+
   identLength++
   const identVal = val && val.toJSON() || ''
   if (identVal.__type === 'Null' || !val) {
@@ -750,6 +791,7 @@ export default function visitor(ast, options, globalVariableList, globalMixinLis
   autoprefixer = options.autoprefixer
   GLOBAL_MIXIN_NAME_LIST = globalMixinList
   GLOBAL_VARIABLE_NAME_LIST = globalVariableList
+  CONSTANTS = options.constants
   let result = visitNodes(ast.nodes) || ''
   const indentation = ' '.repeat(options.indentVueStyleBlock)
   result = result.replace(/(.*\S.*)/g, `${indentation}$1`);
@@ -761,5 +803,18 @@ export default function visitor(ast, options, globalVariableList, globalMixinLis
   VARIABLE_NAME_LIST = []
   GLOBAL_MIXIN_NAME_LIST = []
   GLOBAL_VARIABLE_NAME_LIST = []
+
+  let isFirstUse = true;
+  for (const entry of Object.keys(usePaths)) {
+    const toAdd = `@use '${entry}';\n`;
+    if (isFirstUse) {
+      toAdd += '\n';
+    }
+    result = toAdd + result;
+    isFirstUse = false;
+  }
+
+  usePaths = {};
+
   return result + '\n'
 }
