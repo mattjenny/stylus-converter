@@ -469,7 +469,6 @@ function visitCall({ name, args, lineno, block }) {
     before += '@include '
     before += MIXINS[callName].alias + '.'
 
-    console.log(`Using mixin ${callName} from ${MIXINS[callName]}`);
     usePaths[MIXINS[callName].use] = MIXINS[callName].alias;
   } else if (isCallMixin() || block || selectorLength || GLOBAL_MIXIN_NAME_LIST.indexOf(callName) > -1) {
     before = before || '\n'
@@ -587,8 +586,59 @@ function visitTernary({ cond, lineno }) {
   return before + visitBinOp(cond)
 }
 
+function findOccurrences (str, subStr) {
+  let substrings = [];
+  let startIndex = 0;
+  let pos = str.indexOf(subStr);
+
+  while (pos !== -1) {
+    substrings.push(str.slice(startIndex, pos));
+    startIndex = pos + subStr.length;
+    pos = str.indexOf(subStr, pos + subStr.length);
+  }
+
+  substrings.push(str.slice(startIndex));
+
+  return {
+    count: substrings.length - 1,
+    substrings: substrings
+  };
+};
+
 function visitBinOp({ op, left, right }) {
   binOpLength++
+
+  // MJ: Convert calc syntax to sass syntax
+  if (op === '%' && typeof left.val === 'string' && left.val.startsWith('calc(')) {
+    const substitutions = findOccurrences(left.val, '%s');
+    const rightExp = right ? right.toJSON() : {};
+
+    if (substitutions.count === 0) {
+      throw new Error('No substitution values found, unsure what to do.');
+    } else if (substitutions.count === 1) {
+      const value = `(${visitNode(rightExp)})`;
+      binOpLength--;
+      return substitutions.substrings[0] + value + substitutions.substrings[1];
+    } else {
+      if (rightExp.__type !== 'Expression') {
+        throw new Error(`Expected right to be expression: ${JSON.stringify({ op, left, right })}`);
+      }
+      if (rightExp.nodes.length !== substitutions.count) {
+        throw new Error(`Encountered calc with wrong number of arguments: ${JSON.stringify({ op, left, right })}`);
+      }
+
+      const values = rightExp.nodes.map((node) => `(${visitNode(node)})`);
+
+      let ret = substitutions.substrings[0];
+      values.forEach((value, i) => {
+        ret += value + substitutions.substrings[i + 1];
+      });
+
+      binOpLength--;
+      return ret;
+    }
+  }
+
   function visitNegate(op) {
     if (!isNegate || (op !== '==' && op !== '!=')) {
       return op !== 'is defined' ? op : ''
@@ -612,6 +662,7 @@ function visitBinOp({ op, left, right }) {
   const endSymbol = op === 'is defined' ? '!default;' : ''
 
   binOpLength--
+
   return endSymbol
     ? `${trimSemicolon(visitNode(leftExp)).trim()} ${endSymbol}`
     : `${visitNode(leftExp)} ${symbol} ${expText}`
