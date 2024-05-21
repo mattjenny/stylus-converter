@@ -21,6 +21,7 @@ let VARIABLE_NAME_LIST = []
 let GLOBAL_MIXIN_NAME_LIST = []
 let GLOBAL_VARIABLE_NAME_LIST = []
 let CONSTANTS = {}
+let MIXINS = {}
 let usePaths = {}
 
 let lastPropertyLineno = 0
@@ -345,12 +346,14 @@ function visitProperty(node) {
 }
 
 function visitIdent({ val, name, rest, mixin, property }) {
-  if (CONSTANTS[name]) {
-    usePaths[CONSTANTS[name]] = true;
-  }
-
   identLength++
   const identVal = val && val.toJSON() || ''
+
+  if (CONSTANTS[name]) {
+    usePaths[CONSTANTS[name].use] = CONSTANTS[name].alias;
+    return `${CONSTANTS[name].alias}.${name}`;
+  }
+
   if (identVal.__type === 'Null' || !val) {
     if (isExpression) {
       if (property || isCall) {
@@ -460,7 +463,15 @@ function visitCall({ name, args, lineno, block }) {
   let blockText = ''
   let before = handleLineno(lineno)
   oldLineno = lineno
-  if (isCallMixin() || block || selectorLength || GLOBAL_MIXIN_NAME_LIST.indexOf(callName) > -1) {
+  if (MIXINS[callName]) {
+    before = before || '\n'
+    before += getIndentation()
+    before += '@include '
+    before += MIXINS[callName].alias + '.'
+
+    console.log(`Using mixin ${callName} from ${MIXINS[callName]}`);
+    usePaths[MIXINS[callName].use] = MIXINS[callName].alias;
+  } else if (isCallMixin() || block || selectorLength || GLOBAL_MIXIN_NAME_LIST.indexOf(callName) > -1) {
     before = before || '\n'
     before += getIndentation()
     before += '@include '
@@ -792,6 +803,7 @@ export default function visitor(ast, options, globalVariableList, globalMixinLis
   GLOBAL_MIXIN_NAME_LIST = globalMixinList
   GLOBAL_VARIABLE_NAME_LIST = globalVariableList
   CONSTANTS = options.constants
+  MIXINS = options.mixins
   let result = visitNodes(ast.nodes) || ''
   const indentation = ' '.repeat(options.indentVueStyleBlock)
   result = result.replace(/(.*\S.*)/g, `${indentation}$1`);
@@ -806,7 +818,7 @@ export default function visitor(ast, options, globalVariableList, globalMixinLis
 
   let isFirstUse = true;
   for (const entry of Object.keys(usePaths)) {
-    const toAdd = `@use '${entry}';\n`;
+    const toAdd = `@use '${entry}' as ${usePaths[entry]};\n`;
     if (isFirstUse) {
       toAdd += '\n';
     }
