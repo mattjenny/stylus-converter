@@ -466,10 +466,20 @@ function visitExpression(node) {
   return before + getIndentation() + symbol + result
 }
 
-// Explicitly allow-list functions that are supported and have the same behavior in sass
+// Explicitly allow-list vanilla css functions.
 // Prevents cases like darken and lighten, which exist in sass and therefore aren't flagged
 // by the compiler, but which have different meanings in sass.
-const KNOWN_FUNCTIONS = ['rgb', 'rgba', 'var', 'calc', 'scale', 'rotate', 'translate', 'linear-gradient'];
+const KNOWN_FUNCTIONS = [
+  'rgb',
+  'rgba',
+  'var',
+  'calc',
+  'scale',
+  'rotate',
+  'translate',
+  'linear-gradient',
+  'rect'
+];
 
 function visitCall({ name, args, lineno, block }) {
   isCall = true
