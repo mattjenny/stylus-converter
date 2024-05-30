@@ -310,8 +310,8 @@ function visitProperty(node) {
   isProperty = false
 
   // This is the "absolute" mixin from nib; replace with appropriate position attributes.
-  if (segmentsText === 'absolute') {
-    let transformed = before + 'position: absolute;';
+  if (segmentsText === 'absolute' || segmentsText === 'relative' || segmentsText === 'fixed') {
+    let transformed = before + 'position: ' + segmentsText + ';';
     let lastProperty = undefined;
     const handleProperty = (val) => {
       if (lastProperty) {
@@ -349,9 +349,17 @@ function visitIdent({ val, name, rest, mixin, property }) {
   identLength++
   const identVal = val && val.toJSON() || ''
 
-  if (CONSTANTS[name]) {
-    usePaths[CONSTANTS[name].use] = CONSTANTS[name].alias;
-    return `${CONSTANTS[name].alias}.${name}`;
+  // Special case -- we overrode these names in stylus, un-override them
+  let varName = name;
+  if (name.startsWith('$amplify-')) {
+    varName = '$' + name.slice('$amplify-'.length);
+  }
+
+  // Allow re-assignment of variables from constants files
+  if (CONSTANTS[varName] && identVal.__type != 'Expression') {
+    usePaths[CONSTANTS[varName].use] = CONSTANTS[varName].alias;
+
+    return `${CONSTANTS[varName].alias}.${varName}`;
   }
 
   if (identVal.__type === 'Null' || !val) {
@@ -457,29 +465,46 @@ function visitExpression(node) {
   return before + getIndentation() + symbol + result
 }
 
+// Explicitly allow-list functions that are supported and have the same behavior in sass
+// Prevents cases like darken and lighten, which exist in sass and therefore aren't flagged
+// by the compiler, but which have different meanings in sass.
+const KNOWN_FUNCTIONS = ['rgb', 'rgba', 'var', 'calc', 'scale', 'rotate', 'translate', 'linear-gradient'];
+
 function visitCall({ name, args, lineno, block }) {
   isCall = true
   callName = name
   let blockText = ''
   let before = handleLineno(lineno)
   oldLineno = lineno
-  if (MIXINS[callName]) {
-    before = before || '\n'
-    before += getIndentation()
-    before += '@include '
-    before += MIXINS[callName].alias + '.'
-
-    usePaths[MIXINS[callName].use] = MIXINS[callName].alias;
-  } else if (isCallMixin() || block || selectorLength || GLOBAL_MIXIN_NAME_LIST.indexOf(callName) > -1) {
-    before = before || '\n'
-    before += getIndentation()
-    before += '@include '
-  }
   const argsText = visitArguments(args).replace(/;/g, '')
   isCallParams = false
   if (block) blockText = visitBlock(block)
   callName = ''
   isCall = false
+
+  if (MIXINS[name]) {
+    if (MIXINS[name].isMixin) {
+      before = before || '\n'
+      before += getIndentation()
+      before += '@include '
+    }
+    before += MIXINS[name].alias + '.'
+
+    usePaths[MIXINS[name].use] = MIXINS[name].alias;
+  } else if (isCallMixin() || block || selectorLength || GLOBAL_MIXIN_NAME_LIST.indexOf(name) > -1) {
+    before = before || '\n'
+    before += getIndentation()
+    before += '@include '
+  } else if (name === 'darken' || name === 'lighten') {
+    // See: https://sass-lang.com/documentation/modules/color/#darken
+    const argTokens = argsText.split(',');
+    const separator = name === 'darken' ? ', $lightness: -' : ', $lightness: ';
+    usePaths['sass:color'] = true;
+    return before + 'color.scale(' + argTokens[0] + separator + argTokens[1].trim() + `)${blockText};`;
+  } else if (!KNOWN_FUNCTIONS.includes(name)) {
+    throw new Error('Unknown function: ' + name);
+  }
+
   return `${before + name}(${argsText})${blockText};`
 }
 
@@ -669,7 +694,7 @@ function visitBinOp({ op, left, right }) {
 }
 
 function visitUnaryOp({ op, expr }) {
-  return `${OPEARTION_MAP[op] || op}(${visitExpression(expr)})`
+  return `${OPEARTION_MAP[op] || op}(${visitNode(expr)})`
 }
 
 function visitEach(node) {
@@ -869,7 +894,11 @@ export default function visitor(ast, options, globalVariableList, globalMixinLis
 
   let isFirstUse = true;
   for (const entry of Object.keys(usePaths)) {
-    const toAdd = `@use '${entry}' as ${usePaths[entry]};\n`;
+    let toAdd = `@use '${entry}'`;
+    if (typeof usePaths[entry] === 'string') {
+      toAdd += ` as ${usePaths[entry]}`;
+    }
+    toAdd += `;\n`;
     if (isFirstUse) {
       toAdd += '\n';
     }

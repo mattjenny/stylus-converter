@@ -69,22 +69,29 @@ function populateGlobals() {
 
   for (const entry of [
     { path: 'src/stylesheets/constants.styl', use: 'src/stylesheets/constants', alias: 'c' },
+    { path: 'src/stylesheets/mixins.styl', use: 'src/stylesheets/mixins', alias: 'm' },
     { path: 'src/js/shared-components/common.styl', use: 'src/js/shared-components/common', alias: 'sc' },
-    { path: 'node_modules/@amplify/styles/styl/functions-variables-mixins.styl', use: '@amplify/styles', alias: 'amp' }
+    { path: 'node_modules/@amplify/styles/styl/functions-variables-mixins.styl', use: '@amplify/styles/scss/_functions-variables-mixins.scss', alias: 'amp' }
   ]) {
     const result = fs.readFileSync(entry.path).toString();
     const ast = parse(result)
     const nodes = nodeToJSON(ast.nodes)
     nodes.forEach(node => {
-      const nodeMixins = findMixin(node);
-      for (const mixin of nodeMixins) {
-        if (!mixins[mixin]) {
-          mixins[mixin] = {
-            use: entry.use,
-            alias: entry.alias
-          }
+      if (node.__type === 'Ident' && node.val.toJSON().__type === 'Function' && !mixins[node.name]) {
+        mixins[node.name] = {
+          use: entry.use,
+          alias: entry.alias
         }
       }
+
+      for (const mixin of findMixin(node)) {
+        mixins[mixin] = {
+          use: entry.use,
+          alias: entry.alias,
+          isMixin: true
+        }
+      }
+
       if (node.__type === 'Ident' && node.val.toJSON().__type === 'Expression') {
         if (!constants[node.name]) {
           constants[node.name] = {
