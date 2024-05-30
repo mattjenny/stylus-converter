@@ -390,12 +390,13 @@ function visitIdent({ val, name, rest, mixin, property }) {
   if (identVal.__type === 'Expression') {
     if (findNodesType(identVal.nodes, 'Object')) OBJECT_KEY_LIST.push(name)
     const before = handleLinenoAndIndentation(identVal)
-    oldLineno = identVal.lineno
-    const nodes = nodesToJSON(identVal.nodes || [])
-    let expText = ''
-    nodes.forEach((node, idx) => {
-      expText += idx ? ` ${visitNode(node)}` : visitNode(node)
-    })
+    // oldLineno = identVal.lineno
+    // const nodes = nodesToJSON(identVal.nodes || [])
+    // let expText = ''
+    // nodes.forEach((node, idx) => {
+    //   expText += idx ? ` ${visitNode(node)}` : visitNode(node)
+    // })
+    let expText = visitExpression(identVal);
     VARIABLE_NAME_LIST.push(name)
     identLength--
     return `${before}${replaceFirstATSymbol(name)}: ${trimFnSemicolon(expText)};`
@@ -450,8 +451,8 @@ function visitExpression(node) {
 
   isExpression = false
 
-  if (isProperty && /\);/g.test(result)) result = trimFnSemicolon(result) + ';'
-  if (commentText) result = result + ';' + commentText
+  if (isProperty && /\);/g.test(result)) result = trimFnSemicolon(result) + ';';
+  if (commentText) result = result + '; ' + commentText
   if (isCall || binOpLength) {
     if (callName === 'url') return result.replace(/\s/g, '')
     return result
