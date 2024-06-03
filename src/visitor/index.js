@@ -296,8 +296,8 @@ function visitProperty(node) {
     const ident = expNode.toJSON && expNode.toJSON() || {}
     if (ident.__type === 'Ident') {
       const identVal = _get(ident, ['val', 'toJSON']) && ident.val.toJSON() || {}
+      const beforeExpText = before + trimFirst(visitExpression(expr));
       if (identVal.__type === 'Expression') {
-        const beforeExpText = before + trimFirst(visitExpression(expr))
         const expText = `${before}${segmentsText}: $${ident.name};`
         isProperty = false
         PROPERTY_LIST.unshift({ prop: segmentsText, value: '$' + ident.name })
@@ -305,7 +305,7 @@ function visitProperty(node) {
       }
     }
   }
-  const expText = visitExpression(expr)
+  let expText = visitExpression(expr)
   PROPERTY_LIST.unshift({ prop: segmentsText, value: expText })
   isProperty = false
 
@@ -338,6 +338,11 @@ function visitProperty(node) {
     handleProperty(0);
 
     return transformed;
+  }
+
+  // See: https://sass-lang.com/documentation/breaking-changes/css-vars/
+  if (segmentsText.startsWith('--') && /[a-z+]\.\$/.test(expText)) {
+    expText = `#{${expText}}`
   }
 
   return /\/\//.test(expText)
@@ -441,7 +446,7 @@ function visitExpression(node) {
       comments.push(node)
     } else {
       const nodeText = visitNode(node)
-      const symbol = isProperty && node.nodes.length ? ',' : ''
+      const symbol = isProperty && node.nodes.length ? '' : ''
       result += idx ? symbol + ' ' + nodeText : nodeText
     }
   })
@@ -478,7 +483,11 @@ const KNOWN_FUNCTIONS = [
   'rotate',
   'translate',
   'linear-gradient',
-  'rect'
+  'rect',
+  'grayscale',
+  'translate3d',
+  'translateX',
+  'url'
 ];
 
 function visitCall({ name, args, lineno, block }) {
