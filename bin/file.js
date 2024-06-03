@@ -1,8 +1,12 @@
 const fs = require('fs')
 const debounce = require('lodash.debounce')
 const convertStylus = require('./convertStylus')
+const { parse, nodeToJSON } = require('../lib')
+const findMixin = require('./findMixin')
 
 let startTime = 0
+const constants = {}
+const mixins = {}
 
 function getStat(path, callback) {
   fs.stat(path, (err, stats) => {
@@ -58,6 +62,48 @@ function visitDirectory(input, output, inputParent, outputParent, options, callb
   })
 }
 
+function populateGlobals() {
+  if (Object.keys(constants).length > 0) {
+    return; // Already initialized
+  }
+
+  for (const entry of [
+    { path: 'src/stylesheets/constants.styl', use: 'src/stylesheets/constants', alias: 'c' },
+    { path: 'src/stylesheets/mixins.styl', use: 'src/stylesheets/mixins', alias: 'm' },
+    { path: 'src/js/shared-components/common.styl', use: 'src/js/shared-components/common', alias: 'sc' },
+    { path: 'node_modules/@amplify/styles/styl/functions-variables-mixins.styl', use: '@amplify/styles/scss/_functions-variables-mixins.scss', alias: 'amp' }
+  ]) {
+    const result = fs.readFileSync(entry.path).toString();
+    const ast = parse(result)
+    const nodes = nodeToJSON(ast.nodes)
+    nodes.forEach(node => {
+      if (node.__type === 'Ident' && node.val.toJSON().__type === 'Function' && !mixins[node.name]) {
+        mixins[node.name] = {
+          use: entry.use,
+          alias: entry.alias
+        }
+      }
+
+      for (const mixin of findMixin(node)) {
+        mixins[mixin] = {
+          use: entry.use,
+          alias: entry.alias,
+          isMixin: true
+        }
+      }
+
+      if (node.__type === 'Ident' && node.val.toJSON().__type === 'Expression') {
+        if (!constants[node.name]) {
+          constants[node.name] = {
+            use: entry.use,
+            alias: entry.alias
+          }
+        }
+      }
+    })
+  }
+}
+
 function handleStylus(options, callback) {
   const input = options.input
   const output = options.output
@@ -79,6 +125,9 @@ const handleCall = debounce(function (now, startTime, callback) {
 }, 500)
 
 function converFile(options, callback) {
+  populateGlobals();
+  options.constants = constants
+  options.mixins = mixins
   startTime = Date.now()
   options.status = 'ready'
   handleStylus(options, () => {

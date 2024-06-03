@@ -20,6 +20,10 @@ let PROPERTY_LIST = []
 let VARIABLE_NAME_LIST = []
 let GLOBAL_MIXIN_NAME_LIST = []
 let GLOBAL_VARIABLE_NAME_LIST = []
+let CONSTANTS = {}
+let MIXINS = {}
+let usePaths = {}
+
 let lastPropertyLineno = 0
 let lastPropertyLength = 0
 
@@ -163,6 +167,7 @@ function visitNode(node) {
   }
   const json = node.__type ? node : node.toJSON && node.toJSON()
   const handler = TYPE_VISITOR_MAP[json.__type]
+  debugger
   return handler ? handler(node) : ''
 }
 
@@ -275,9 +280,10 @@ function visitLiteral(node) {
   return node.val || ''
 }
 
-function visitProperty({ expr, lineno, segments }) {
+function visitProperty(node) {
+  const { expr, lineno, segments } = node;
   const suffix = ';'
-  const before = handleLinenoAndIndentation({ lineno })
+  let before = handleLinenoAndIndentation({ lineno })
   oldLineno = lineno
   isProperty = true
   const segmentsText = visitNodes(segments)
@@ -290,8 +296,8 @@ function visitProperty({ expr, lineno, segments }) {
     const ident = expNode.toJSON && expNode.toJSON() || {}
     if (ident.__type === 'Ident') {
       const identVal = _get(ident, ['val', 'toJSON']) && ident.val.toJSON() || {}
+      const beforeExpText = before + trimFirst(visitExpression(expr));
       if (identVal.__type === 'Expression') {
-        const beforeExpText = before + trimFirst(visitExpression(expr))
         const expText = `${before}${segmentsText}: $${ident.name};`
         isProperty = false
         PROPERTY_LIST.unshift({ prop: segmentsText, value: '$' + ident.name })
@@ -299,9 +305,46 @@ function visitProperty({ expr, lineno, segments }) {
       }
     }
   }
-  const expText = visitExpression(expr)
+  let expText = visitExpression(expr)
   PROPERTY_LIST.unshift({ prop: segmentsText, value: expText })
   isProperty = false
+
+  // This is the "absolute" mixin from nib; replace with appropriate position attributes.
+  if (segmentsText === 'absolute' || segmentsText === 'relative' || segmentsText === 'fixed') {
+    let transformed = before + 'position: ' + segmentsText + ';';
+    let lastProperty = undefined;
+    const handleProperty = (val) => {
+      if (lastProperty) {
+        before = handleLinenoAndIndentation(node)
+        oldLineno = node.lineno
+        transformed += `\n${before}${lastProperty}: ${val};`;
+        lastProperty = undefined;
+      }
+    }
+
+    const KNOWN_PROPERTIES = ['top', 'right', 'bottom', 'left'];
+
+    const nodes = nodesToJSON(expr.nodes)
+    nodes.forEach((node) => {
+      const nodeText = visitNode(node);
+      if (KNOWN_PROPERTIES.includes(nodeText)) {
+        handleProperty(0); // Set previous value to 0, if one has been found already
+        lastProperty = nodeText;
+      } else {
+        handleProperty(nodeText);
+      }
+    });
+
+    handleProperty(0);
+
+    return transformed;
+  }
+
+  // See: https://sass-lang.com/documentation/breaking-changes/css-vars/
+  if (segmentsText.startsWith('--') && /[a-z+]\.\$/.test(expText)) {
+    expText = `#{${expText}}`
+  }
+
   return /\/\//.test(expText)
     ? `${before + segmentsText.replace(/^$/, '')}: ${expText}`
     : trimSemicolon(`${before + segmentsText.replace(/^$/, '')}: ${expText + suffix}`, ';')
@@ -310,6 +353,20 @@ function visitProperty({ expr, lineno, segments }) {
 function visitIdent({ val, name, rest, mixin, property }) {
   identLength++
   const identVal = val && val.toJSON() || ''
+
+  // Special case -- we overrode these names in stylus, un-override them
+  let varName = name;
+  if (name.startsWith('$amplify-')) {
+    varName = '$' + name.slice('$amplify-'.length);
+  }
+
+  // Allow re-assignment of variables from constants files
+  if (CONSTANTS[varName] && identVal.__type != 'Expression') {
+    usePaths[CONSTANTS[varName].use] = CONSTANTS[varName].alias;
+
+    return `${CONSTANTS[varName].alias}.${varName}`;
+  }
+
   if (identVal.__type === 'Null' || !val) {
     if (isExpression) {
       if (property || isCall) {
@@ -338,12 +395,13 @@ function visitIdent({ val, name, rest, mixin, property }) {
   if (identVal.__type === 'Expression') {
     if (findNodesType(identVal.nodes, 'Object')) OBJECT_KEY_LIST.push(name)
     const before = handleLinenoAndIndentation(identVal)
-    oldLineno = identVal.lineno
-    const nodes = nodesToJSON(identVal.nodes || [])
-    let expText = ''
-    nodes.forEach((node, idx) => {
-      expText += idx ? ` ${visitNode(node)}` : visitNode(node)
-    })
+    // oldLineno = identVal.lineno
+    // const nodes = nodesToJSON(identVal.nodes || [])
+    // let expText = ''
+    // nodes.forEach((node, idx) => {
+    //   expText += idx ? ` ${visitNode(node)}` : visitNode(node)
+    // })
+    let expText = visitExpression(identVal);
     VARIABLE_NAME_LIST.push(name)
     identLength--
     return `${before}${replaceFirstATSymbol(name)}: ${trimFnSemicolon(expText)};`
@@ -388,7 +446,7 @@ function visitExpression(node) {
       comments.push(node)
     } else {
       const nodeText = visitNode(node)
-      const symbol = isProperty && node.nodes.length ? ',' : ''
+      const symbol = isProperty && node.nodes.length ? '' : ''
       result += idx ? symbol + ' ' + nodeText : nodeText
     }
   })
@@ -398,8 +456,8 @@ function visitExpression(node) {
 
   isExpression = false
 
-  if (isProperty && /\);/g.test(result)) result = trimFnSemicolon(result) + ';'
-  if (commentText) result = result + ';' + commentText
+  if (isProperty && /\);/g.test(result)) result = trimFnSemicolon(result) + ';';
+  if (commentText) result = result + '; ' + commentText
   if (isCall || binOpLength) {
     if (callName === 'url') return result.replace(/\s/g, '')
     return result
@@ -413,22 +471,68 @@ function visitExpression(node) {
   return before + getIndentation() + symbol + result
 }
 
+// Explicitly allow-list vanilla css functions.
+// Prevents cases like darken and lighten, which exist in sass and therefore aren't flagged
+// by the compiler, but which have different meanings in sass.
+const KNOWN_FUNCTIONS = [
+  'rgb',
+  'rgba',
+  'var',
+  'calc',
+  'scale',
+  'rotate',
+  'translate',
+  'linear-gradient',
+  'rect',
+  'grayscale',
+  'translate3d',
+  'translateX',
+  'url'
+];
+
 function visitCall({ name, args, lineno, block }) {
   isCall = true
   callName = name
   let blockText = ''
   let before = handleLineno(lineno)
   oldLineno = lineno
-  if (isCallMixin() || block || selectorLength || GLOBAL_MIXIN_NAME_LIST.indexOf(callName) > -1) {
-    before = before || '\n'
-    before += getIndentation()
-    before += '@include '
-  }
   const argsText = visitArguments(args).replace(/;/g, '')
   isCallParams = false
   if (block) blockText = visitBlock(block)
   callName = ''
   isCall = false
+
+  if (MIXINS[name]) {
+    if (MIXINS[name].isMixin) {
+      before = before || '\n'
+      before += getIndentation()
+      before += '@include '
+    }
+    before += MIXINS[name].alias + '.'
+
+    usePaths[MIXINS[name].use] = MIXINS[name].alias;
+  } else if (isCallMixin() || block || selectorLength || GLOBAL_MIXIN_NAME_LIST.indexOf(name) > -1) {
+    before = before || '\n'
+    before += getIndentation()
+    before += '@include '
+  } else if (name === 'darken' || name === 'lighten') {
+    // See: https://sass-lang.com/documentation/modules/color/#darken
+    const argTokens = argsText.split(',');
+    const separator = name === 'darken' ? ', $lightness: -' : ', $lightness: ';
+    usePaths['sass:color'] = true;
+    return before + 'color.scale(' + argTokens[0] + separator + argTokens[1].trim() + `)${blockText};`;
+  } else if (name === 'shade' || name === 'tint' || name === 'mix') {
+    // See: https://sass-lang.com/documentation/modules/color/#mix
+    const argTokens = argsText.split(',');
+    const color2 = name === 'mix' ? argTokens[1].trim() :
+      name === 'shade' ? '#000000' : '#ffffff';
+    const amount = name === 'mix' ? argTokens[2] : argTokens[1];
+    usePaths['sass:color'] = true;
+    return before + 'color.mix(' + argTokens[0] + ', ' + color2 + ', ' + amount + `)${blockText};`;
+  } else if (!KNOWN_FUNCTIONS.includes(name)) {
+    throw new Error('Unknown function: ' + name);
+  }
+
   return `${before + name}(${argsText})${blockText};`
 }
 
@@ -535,8 +639,59 @@ function visitTernary({ cond, lineno }) {
   return before + visitBinOp(cond)
 }
 
+function findOccurrences (str, subStr) {
+  let substrings = [];
+  let startIndex = 0;
+  let pos = str.indexOf(subStr);
+
+  while (pos !== -1) {
+    substrings.push(str.slice(startIndex, pos));
+    startIndex = pos + subStr.length;
+    pos = str.indexOf(subStr, pos + subStr.length);
+  }
+
+  substrings.push(str.slice(startIndex));
+
+  return {
+    count: substrings.length - 1,
+    substrings: substrings
+  };
+};
+
 function visitBinOp({ op, left, right }) {
   binOpLength++
+
+  // MJ: Convert calc syntax to sass syntax
+  if (op === '%' && typeof left.val === 'string' && left.val.startsWith('calc(')) {
+    const substitutions = findOccurrences(left.val, '%s');
+    const rightExp = right ? right.toJSON() : {};
+
+    if (substitutions.count === 0) {
+      throw new Error('No substitution values found, unsure what to do.');
+    } else if (substitutions.count === 1) {
+      const value = `(${visitNode(rightExp)})`;
+      binOpLength--;
+      return substitutions.substrings[0] + value + substitutions.substrings[1];
+    } else {
+      if (rightExp.__type !== 'Expression') {
+        throw new Error(`Expected right to be expression: ${JSON.stringify({ op, left, right })}`);
+      }
+      if (rightExp.nodes.length !== substitutions.count) {
+        throw new Error(`Encountered calc with wrong number of arguments: ${JSON.stringify({ op, left, right })}`);
+      }
+
+      const values = rightExp.nodes.map((node) => `(${visitNode(node)})`);
+
+      let ret = substitutions.substrings[0];
+      values.forEach((value, i) => {
+        ret += value + substitutions.substrings[i + 1];
+      });
+
+      binOpLength--;
+      return ret;
+    }
+  }
+
   function visitNegate(op) {
     if (!isNegate || (op !== '==' && op !== '!=')) {
       return op !== 'is defined' ? op : ''
@@ -560,13 +715,14 @@ function visitBinOp({ op, left, right }) {
   const endSymbol = op === 'is defined' ? '!default;' : ''
 
   binOpLength--
+
   return endSymbol
     ? `${trimSemicolon(visitNode(leftExp)).trim()} ${endSymbol}`
     : `${visitNode(leftExp)} ${symbol} ${expText}`
 }
 
 function visitUnaryOp({ op, expr }) {
-  return `${OPEARTION_MAP[op] || op}(${visitExpression(expr)})`
+  return `${OPEARTION_MAP[op] || op}(${visitNode(expr)})`
 }
 
 function visitEach(node) {
@@ -750,6 +906,8 @@ export default function visitor(ast, options, globalVariableList, globalMixinLis
   autoprefixer = options.autoprefixer
   GLOBAL_MIXIN_NAME_LIST = globalMixinList
   GLOBAL_VARIABLE_NAME_LIST = globalVariableList
+  CONSTANTS = options.constants
+  MIXINS = options.mixins
   let result = visitNodes(ast.nodes) || ''
   const indentation = ' '.repeat(options.indentVueStyleBlock)
   result = result.replace(/(.*\S.*)/g, `${indentation}$1`);
@@ -761,5 +919,22 @@ export default function visitor(ast, options, globalVariableList, globalMixinLis
   VARIABLE_NAME_LIST = []
   GLOBAL_MIXIN_NAME_LIST = []
   GLOBAL_VARIABLE_NAME_LIST = []
+
+  let isFirstUse = true;
+  for (const entry of Object.keys(usePaths)) {
+    let toAdd = `@use '${entry}'`;
+    if (typeof usePaths[entry] === 'string') {
+      toAdd += ` as ${usePaths[entry]}`;
+    }
+    toAdd += `;\n`;
+    if (isFirstUse) {
+      toAdd += '\n';
+    }
+    result = toAdd + result;
+    isFirstUse = false;
+  }
+
+  usePaths = {};
+
   return result + '\n'
 }

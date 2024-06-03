@@ -33,6 +33,7 @@ function convertStylus(input, output, options, callback) {
           result = ''
           callLen--
           console.error('Failed to convert', input)
+          process.exit(1);
           return;
         }
         outputPath = output.replace(/\.styl$/, '.' + options.conver)
