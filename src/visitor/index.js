@@ -487,7 +487,11 @@ const KNOWN_FUNCTIONS = [
   'grayscale',
   'translate3d',
   'translateX',
-  'url'
+  'translateY',
+  'url',
+  'format',
+  'local',
+  'repeat'
 ];
 
 function visitCall({ name, args, lineno, block }) {
@@ -521,15 +525,17 @@ function visitCall({ name, args, lineno, block }) {
     const separator = name === 'darken' ? ', $lightness: -' : ', $lightness: ';
     usePaths['sass:color'] = true;
     return before + 'color.scale(' + argTokens[0] + separator + argTokens[1].trim() + `)${blockText};`;
-  } else if (name === 'shade' || name === 'tint' || name === 'mix') {
+  } else if (name === 'shade' || name === 'tint' || name === 'mix' || name === 'blend') {
     // See: https://sass-lang.com/documentation/modules/color/#mix
     const argTokens = argsText.split(',');
-    const color2 = name === 'mix' ? argTokens[1].trim() :
+    const color2 = name === 'blend' ? (argTokens[1].trim() || '#fff') :
+      name === 'mix' ? argTokens[1].trim() :
       name === 'shade' ? '#000000' : '#ffffff';
-    const amount = name === 'mix' ? argTokens[2] : argTokens[1];
+    const amount = name === 'blend' ? '$weight: 50%' : name === 'mix' ? argTokens[2] : argTokens[1];
     usePaths['sass:color'] = true;
     return before + 'color.mix(' + argTokens[0] + ', ' + color2 + ', ' + amount + `)${blockText};`;
-  } else if (!KNOWN_FUNCTIONS.includes(name)) {
+  }
+  else if (!KNOWN_FUNCTIONS.includes(name)) {
     throw new Error('Unknown function: ' + name);
   }
 
