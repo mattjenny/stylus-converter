@@ -488,6 +488,7 @@ const KNOWN_FUNCTIONS = [
   'translate3d',
   'translateX',
   'translateY',
+  'translateZ',
   'url',
   'format',
   'local',

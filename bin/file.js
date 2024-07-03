@@ -68,10 +68,10 @@ function populateGlobals() {
   }
 
   for (const entry of [
+    { path: 'node_modules/@amplify/styles/styl/functions-variables-mixins.styl', use: '@amplify/styles/scss/_functions-variables-mixins.scss', alias: 'amp' },
     { path: 'src/stylesheets/constants.styl', use: 'src/stylesheets/constants', alias: 'c' },
     { path: 'src/stylesheets/mixins.styl', use: 'src/stylesheets/mixins', alias: 'm' },
     { path: 'src/js/shared-components/common.styl', use: 'src/js/shared-components/common', alias: 'sc' },
-    { path: 'node_modules/@amplify/styles/styl/functions-variables-mixins.styl', use: '@amplify/styles/scss/_functions-variables-mixins.scss', alias: 'amp' }
   ]) {
     const result = fs.readFileSync(entry.path).toString();
     const ast = parse(result)
